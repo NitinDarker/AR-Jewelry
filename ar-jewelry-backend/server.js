@@ -28,8 +28,8 @@ const presets = [
   {
     id: 'neck_1',
     type: 'necklace',
-    name: 'Gold Chain',
-    url: 'http://localhost:5001/uploads/default_necklace.png'
+    name: 'Gold Necklace',
+    url: 'http://localhost:5001/uploads/default_necklace.jpg'
   },
   {
     id: 'ear_1',
