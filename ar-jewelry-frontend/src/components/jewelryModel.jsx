@@ -2,52 +2,117 @@ import React, { useRef, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
+// The invisible mesh that writes to the depth buffer
+const FingerOccluder = ({ length, thickness }) => (
+  <mesh rotation={[Math.PI / 2, 0, 0]}>
+    <cylinderGeometry args={[thickness, thickness, length, 32]} />
+    <meshBasicMaterial colorWrite={false} depthWrite={true} />
+  </mesh>
+);
+
 export default function JewelryModel({ trackingDataRef, activeJewelry }) {
-  const meshRef = useRef();
+  const necklaceGroupRef = useRef();
+  const ringGroupRef = useRef();
+  const flatRingRef = useRef();
   const { viewport } = useThree();
 
-  // Dynamically load the 2D texture. Returns a blank texture if URL is null.
-  const texture = useMemo(() => {
-    if (!activeJewelry?.url) return new THREE.Texture();
-    const loader = new THREE.TextureLoader();
-    return loader.load(activeJewelry.url);
-  }, [activeJewelry?.url]);
+  // Texture Loaders
+  const texLoader = new THREE.TextureLoader();
+  const texNecklace = useMemo(() => activeJewelry?.url ? texLoader.load(activeJewelry.url) : new THREE.Texture(), [activeJewelry?.url]);
+  const texRingTop = useMemo(() => activeJewelry?.urlTop ? texLoader.load(activeJewelry.urlTop) : new THREE.Texture(), [activeJewelry?.urlTop]);
+  const texRingBottom = useMemo(() => activeJewelry?.urlBottom ? texLoader.load(activeJewelry.urlBottom) : new THREE.Texture(), [activeJewelry?.urlBottom]);
 
   useFrame(() => {
-    if (!meshRef.current || !trackingDataRef.current || !activeJewelry) return;
+    if (!trackingDataRef.current || !activeJewelry) return;
+    const { faceLandmarks, handLandmarks } = trackingDataRef.current;
 
-    const { faceLandmarks } = trackingDataRef.current;
-    
-    if (activeJewelry.type === 'necklace' && faceLandmarks) {
+    // --- NECKLACE MATH ---
+    if (activeJewelry.type === 'necklace' && faceLandmarks && necklaceGroupRef.current) {
       const chin = faceLandmarks[152];
       const leftJaw = faceLandmarks[132];
       const rightJaw = faceLandmarks[361];
 
-      // Coordinate mapping from normalized MediaPipe to Three.js world space
       const x = (chin.x - 0.5) * viewport.width;
-      const y = -(chin.y - 0.5) * viewport.height - (viewport.height * 0.15); // Offset down
-      
+      const y = -(chin.y - 0.5) * viewport.height;
       const faceWidth = Math.abs(rightJaw.x - leftJaw.x);
-      const z = (faceWidth * 10) - 5; // Fake depth
+      const z = (faceWidth * 10) - 5; 
       const roll = Math.atan2(rightJaw.y - leftJaw.y, rightJaw.x - leftJaw.x);
 
-      // Lerp for smooth tracking
-      meshRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
-      meshRef.current.rotation.z = -roll;
+      necklaceGroupRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
+      necklaceGroupRef.current.rotation.z = -roll;
+      const scale = faceWidth * viewport.width * 1.8;
+      necklaceGroupRef.current.scale.lerp(new THREE.Vector3(scale, scale, 1), 0.4);
+    }
+
+    // --- RING MATH (Handles both 2.5D and Flat Fallback) ---
+    if (activeJewelry.type === 'ring' && handLandmarks) {
+      const mcp = handLandmarks[13]; 
+      const pip = handLandmarks[14]; 
+
+      const x = (pip.x - 0.5) * viewport.width;
+      const y = -(pip.y - 0.5) * viewport.height;
+      const segmentLen = Math.hypot(pip.x - mcp.x, pip.y - mcp.y);
+      const z = (segmentLen * 20) - 5;
+      const angle = Math.atan2(-(pip.y - mcp.y), -(pip.x - mcp.x)); 
+      const scale = segmentLen * viewport.width * 4;
+
+      // Apply to Occlusion Sandwich
+      if (ringGroupRef.current && activeJewelry.urlTop) {
+        ringGroupRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
+        ringGroupRef.current.rotation.z = angle + Math.PI / 2;
+        ringGroupRef.current.scale.lerp(new THREE.Vector3(scale, scale, scale), 0.4); // Scale in all 3 axes for cylinder
+      }
       
-      // Scale plane to match face width relative to viewport
-      const scale = faceWidth * viewport.width * 1.2;
-      meshRef.current.scale.lerp(new THREE.Vector3(scale, scale, 1), 0.4);
+      // Apply to Flat Fallback (Custom Uploads)
+      if (flatRingRef.current && activeJewelry.url) {
+        flatRingRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
+        flatRingRef.current.rotation.z = angle + Math.PI / 2;
+        flatRingRef.current.scale.lerp(new THREE.Vector3(scale, scale, 1), 0.4);
+      }
     }
   });
 
-  if (!activeJewelry || activeJewelry.type !== 'necklace') return null;
+  if (!activeJewelry) return null;
 
   return (
-    <mesh ref={meshRef}>
-      <planeGeometry args={[1, 1]} />
-      {/* Basic material ensures it doesn't need 3D lights to be visible, DoubleSide shows it from behind */}
-      <meshBasicMaterial map={texture} transparent={true} side={THREE.DoubleSide} depthTest={false} />
-    </mesh>
+    <>
+      {/* Necklace */}
+      <group ref={necklaceGroupRef} visible={activeJewelry.type === 'necklace'}>
+        <mesh position={[0, -0.4, 0]}>
+          <planeGeometry args={[1, 1]} />
+          <meshBasicMaterial map={texNecklace} transparent={true} side={THREE.DoubleSide} depthTest={false} />
+        </mesh>
+      </group>
+
+      {/* 2.5D Occlusion Ring (For predefined split assets) */}
+      {activeJewelry.type === 'ring' && activeJewelry.urlTop && (
+        <group ref={ringGroupRef}>
+          {/* Background Plane (Bottom of ring) */}
+          <mesh position={[0, 0, -0.1]}>
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={texRingBottom} transparent={true} depthTest={true} />
+          </mesh>
+
+          {/* Invisible Finger Occluder */}
+          <FingerOccluder length={2} thickness={0.15} />
+
+          {/* Foreground Plane (Top of ring) */}
+          <mesh position={[0, 0, 0.1]}>
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={texRingTop} transparent={true} depthTest={true} />
+          </mesh>
+        </group>
+      )}
+
+      {/* Flat Fallback Ring (For single-image user uploads) */}
+      {activeJewelry.type === 'ring' && activeJewelry.url && (
+        <group ref={flatRingRef}>
+          <mesh position={[0, 0, 0]}>
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={texNecklace} transparent={true} side={THREE.DoubleSide} depthTest={false} />
+          </mesh>
+        </group>
+      )}
+    </>
   );
 }
