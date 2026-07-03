@@ -1,108 +1,73 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
-const FingerOccluder = ({ length, thickness }) => (
-  <mesh rotation={[Math.PI / 2, 0, 0]}>
-    <cylinderGeometry args={[thickness, thickness, length, 32]} />
-    <meshBasicMaterial colorWrite={false} depthWrite={true} />
-  </mesh>
-);
-
-export default function JewelryModel({ trackingDataRef, activeJewelry }) {
-  const necklaceGroupRef = useRef();
-  const ringGroupRef = useRef();
-  const flatRingRef = useRef();
-  const { viewport } = useThree(); // <--- This hook is what crashed your app because you put this component in the wrong place.
-
-  const texLoader = new THREE.TextureLoader();
-  const texNecklace = useMemo(() => activeJewelry?.url ? texLoader.load(activeJewelry.url) : new THREE.Texture(), [activeJewelry?.url]);
-  const texRingTop = useMemo(() => activeJewelry?.urlTop ? texLoader.load(activeJewelry.urlTop) : new THREE.Texture(), [activeJewelry?.urlTop]);
-  const texRingBottom = useMemo(() => activeJewelry?.urlBottom ? texLoader.load(activeJewelry.urlBottom) : new THREE.Texture(), [activeJewelry?.urlBottom]);
+export default function TrackingVisualizer({ trackingDataRef }) {
+  const fingerMarkerRef = useRef();
+  const neckMarkerRef = useRef();
+  const { viewport } = useThree();
 
   useFrame(() => {
-    if (!trackingDataRef.current || !activeJewelry) return;
-    const { faceLandmarks, handLandmarks } = trackingDataRef.current;
+    if (!trackingDataRef.current) return;
+    const { handLandmarks, faceLandmarks } = trackingDataRef.current;
 
-    if (activeJewelry.type === 'necklace' && faceLandmarks && necklaceGroupRef.current && texNecklace.image) {
-      const chin = faceLandmarks[152];
-      const leftJaw = faceLandmarks[132];
-      const rightJaw = faceLandmarks[361];
-
-      const faceWidth = Math.abs(rightJaw.x - leftJaw.x);
-      const imgWidth = texNecklace.image.width;
-      const imgHeight = texNecklace.image.height;
-      const aspectRatio = imgHeight / imgWidth;
-
-      const targetWidth = faceWidth * viewport.width * 1.8;
-      const targetHeight = targetWidth * aspectRatio;
-
-      const x = (chin.x - 0.5) * viewport.width;
-      const y = -(chin.y - 0.5) * viewport.height;
-      const z = (faceWidth * 10) - 5; 
-      const roll = Math.atan2(rightJaw.y - leftJaw.y, rightJaw.x - leftJaw.x);
-
-      necklaceGroupRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
-      necklaceGroupRef.current.rotation.z = -roll;
-      necklaceGroupRef.current.scale.lerp(new THREE.Vector3(targetWidth, targetHeight, 1), 0.4);
-    }
-
-    if (activeJewelry.type === 'ring' && handLandmarks) {
+    // --- FINGER TRACKING (RED) ---
+    if (handLandmarks && fingerMarkerRef.current) {
       const mcp = handLandmarks[13]; 
       const pip = handLandmarks[14]; 
 
       const x = (pip.x - 0.5) * viewport.width;
       const y = -(pip.y - 0.5) * viewport.height;
-      const segmentLen = Math.hypot(pip.x - mcp.x, pip.y - mcp.y);
-      const z = (segmentLen * 20) - 5;
       const angle = Math.atan2(-(pip.y - mcp.y), -(pip.x - mcp.x)); 
 
-      if (flatRingRef.current && activeJewelry.url && texNecklace.image) {
-        const aspectRatio = texNecklace.image.height / texNecklace.image.width;
-        const targetWidth = segmentLen * viewport.width * 4;
-        const targetHeight = targetWidth * aspectRatio;
+      fingerMarkerRef.current.position.lerp(new THREE.Vector3(-x, y, 1), 0.4);
+      fingerMarkerRef.current.rotation.z = angle + Math.PI / 2;
+    } else if (fingerMarkerRef.current) {
+      // Throw it off-screen when no hand is detected
+      fingerMarkerRef.current.position.lerp(new THREE.Vector3(999, 999, -10), 1);
+    }
 
-        flatRingRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
-        flatRingRef.current.rotation.z = angle + Math.PI / 2;
-        flatRingRef.current.scale.lerp(new THREE.Vector3(targetWidth, targetHeight, 1), 0.4);
-      }
+    // --- NECK TRACKING (GREEN) ---
+    if (faceLandmarks && neckMarkerRef.current) {
+      const chin = faceLandmarks[152];
+      const lowerLip = faceLandmarks[17];
+      const leftJaw = faceLandmarks[132];
+      const rightJaw = faceLandmarks[361];
 
-      if (ringGroupRef.current && activeJewelry.urlTop && texRingTop.image) {
-        const aspectRatio = texRingTop.image.height / texRingTop.image.width;
-        const targetWidth = segmentLen * viewport.width * 4;
-        const targetHeight = targetWidth * aspectRatio;
+      // Measure the face to build a dynamic bounding box
+      const faceWidth = Math.abs(rightJaw.x - leftJaw.x);
+      const jawHeight = Math.abs(chin.y - lowerLip.y); 
 
-        ringGroupRef.current.position.lerp(new THREE.Vector3(-x, y, z), 0.4);
-        ringGroupRef.current.rotation.z = angle + Math.PI / 2;
-        ringGroupRef.current.scale.lerp(new THREE.Vector3(targetWidth, targetHeight, 1), 0.4);
-      }
+      // Offset downward by 1.5x the jaw height to target the collarbone
+      const x = (chin.x - 0.5) * viewport.width;
+      const y = -(chin.y - 0.5 + (jawHeight * 1.5)) * viewport.height;
+      const roll = Math.atan2(rightJaw.y - leftJaw.y, rightJaw.x - leftJaw.x);
+
+      // Scale the green box dynamically relative to the face size
+      const targetWidth = faceWidth * viewport.width * 1.8;
+      const targetHeight = jawHeight * viewport.height * 2.5;
+
+      neckMarkerRef.current.position.lerp(new THREE.Vector3(-x, y, 1), 0.4);
+      neckMarkerRef.current.rotation.z = -roll;
+      neckMarkerRef.current.scale.lerp(new THREE.Vector3(targetWidth, targetHeight, 1), 0.4);
+    } else if (neckMarkerRef.current) {
+      neckMarkerRef.current.position.lerp(new THREE.Vector3(999, 999, -10), 1);
     }
   });
 
-  if (!activeJewelry) return null;
-
   return (
     <>
-      <group ref={necklaceGroupRef} visible={activeJewelry.type === 'necklace'}>
-        <mesh>
-          <planeGeometry args={[1, 1]} onUpdate={self => self.translate(0, -0.5, 0)} />
-          <meshBasicMaterial map={texNecklace} transparent={true} side={THREE.DoubleSide} depthTest={false} />
-        </mesh>
-      </group>
+      {/* FINGER HIGHLIGHT (Static Size) */}
+      <mesh ref={fingerMarkerRef}>
+        <planeGeometry args={[0.8, 1.6]} />
+        <meshBasicMaterial color="#FF0000" depthTest={false} transparent={true} opacity={0.5} side={THREE.DoubleSide} />
+      </mesh>
 
-      {activeJewelry.type === 'ring' && activeJewelry.urlTop && (
-        <group ref={ringGroupRef}>
-          <mesh position={[0, 0, -0.15]}><planeGeometry args={[1, 1]} /><meshBasicMaterial map={texRingBottom} transparent={true} depthTest={true} /></mesh>
-          <FingerOccluder length={2} thickness={0.15} />
-          <mesh position={[0, 0, 0.15]}><planeGeometry args={[1, 1]} /><meshBasicMaterial map={texRingTop} transparent={true} depthTest={true} /></mesh>
-        </group>
-      )}
-
-      {activeJewelry.type === 'ring' && activeJewelry.url && (
-        <group ref={flatRingRef}>
-          <mesh position={[0, 0, 0]}><planeGeometry args={[1, 1]} /><meshBasicMaterial map={texNecklace} transparent={true} side={THREE.DoubleSide} depthTest={false} /></mesh>
-        </group>
-      )}
+      {/* NECK HIGHLIGHT (Dynamically Scaled) */}
+      <mesh ref={neckMarkerRef}>
+        <planeGeometry args={[0.6, 1]} />
+        <meshBasicMaterial color="#00FF00" depthTest={false} transparent={true} opacity={0.5} side={THREE.DoubleSide} />
+      </mesh>
     </>
   );
 }
